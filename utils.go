@@ -145,19 +145,30 @@ func getBuildInTypeByLang(value, lang string) (buildType string, ok bool) {
 }
 
 func getBasefromSimpleType(name string, XSDSchema []interface{}) string {
+	if name == "" {
+		return name
+	}
+
 	for _, ele := range XSDSchema {
 		switch v := ele.(type) {
 		case *SimpleType:
 			if !v.List && !v.Union && v.Name == name {
-				return v.Base
+				if v.Base != "" {
+					return v.Base
+				}
 			}
 		case *Attribute:
-			if v.Name == name {
+			if v.Name == name && v.Type != "" {
 				return v.Type
 			}
 		case *Element:
-			if v.Name == name {
+			if v.Name == name && v.Type != "" {
 				return v.Type
+			}
+		case *ComplexType:
+			if v.Name == name {
+				// For complex types, return the name itself as it should be a struct
+				return name
 			}
 		}
 	}
@@ -217,6 +228,11 @@ func callFuncByName(receiver interface{}, name string, params []reflect.Value) (
 		}
 	}
 	return
+}
+
+// CallFuncByName is the exported version of callFuncByName.
+func CallFuncByName(receiver interface{}, name string, params []reflect.Value) (err error) {
+	return callFuncByName(receiver, name, params)
 }
 
 // isValidUrl tests a string to determine if it is a well-structured url or

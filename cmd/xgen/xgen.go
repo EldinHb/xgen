@@ -28,6 +28,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 
 	"github.com/xuri/xgen"
 )
@@ -105,22 +108,88 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
+	// Use shared context across all files to resolve cross-references
+	sharedOptions := &xgen.Options{
+		InputDir:            cfg.I,
+		OutputDir:           cfg.O,
+		Lang:                cfg.Lang,
+		Package:             cfg.Pkg,
+		IncludeMap:          make(map[string]bool),
+		LocalNameNSMap:      make(map[string]string),
+		NSSchemaLocationMap: make(map[string]string),
+		ParseFileList:       make(map[string]bool),
+		ParseFileMap:        make(map[string][]interface{}),
+		ProtoTree:           make([]interface{}, 0),
+		RemoteSchema:        make(map[string][]byte),
+	}
+
+	// First pass: collect all referenced files (imports/includes)
+	allFiles := make(map[string]bool)
 	for _, file := range files {
-		if err = xgen.NewParser(&xgen.Options{
+		if err = xgen.CollectReferencedFiles(file, cfg.I, allFiles, sharedOptions); err != nil {
+			fmt.Printf("error collecting referenced files from %s: %s\r\n", file, err.Error())
+			os.Exit(1)
+		}
+	}
+
+	// Add original files to the collection
+	for _, file := range files {
+		allFiles[file] = true
+	}
+
+	// Second pass: parse all files with shared context (extract only, no generation)
+	allProtoTrees := make([]interface{}, 0)
+
+	for file := range allFiles {
+		// Clone shared options for each file but keep shared maps, set Extract=true to prevent individual file generation
+		fileOptions := &xgen.Options{
 			FilePath:            file,
-			InputDir:            cfg.I,
-			OutputDir:           cfg.O,
-			Lang:                cfg.Lang,
-			Package:             cfg.Pkg,
-			IncludeMap:          make(map[string]bool),
-			LocalNameNSMap:      make(map[string]string),
-			NSSchemaLocationMap: make(map[string]string),
-			ParseFileList:       make(map[string]bool),
-			ParseFileMap:        make(map[string][]interface{}),
+			InputDir:            sharedOptions.InputDir,
+			OutputDir:           sharedOptions.OutputDir,
+			Extract:             true, // Set to true to prevent individual file generation
+			Lang:                sharedOptions.Lang,
+			Package:             sharedOptions.Package,
+			IncludeMap:          sharedOptions.IncludeMap,
+			LocalNameNSMap:      sharedOptions.LocalNameNSMap,
+			NSSchemaLocationMap: sharedOptions.NSSchemaLocationMap,
+			ParseFileList:       sharedOptions.ParseFileList,
+			ParseFileMap:        sharedOptions.ParseFileMap,
 			ProtoTree:           make([]interface{}, 0),
-			RemoteSchema:        make(map[string][]byte),
-		}).Parse(); err != nil {
+			RemoteSchema:        sharedOptions.RemoteSchema,
+		}
+
+		if err = xgen.NewParser(fileOptions).Parse(); err != nil {
 			fmt.Printf("process error on %s: %s\r\n", file, err.Error())
+			os.Exit(1)
+		}
+
+		// Collect all proto trees
+		allProtoTrees = append(allProtoTrees, fileOptions.ProtoTree...)
+		sharedOptions.ParseFileMap[file] = fileOptions.ProtoTree
+	}
+
+	// Third pass: generate single combined output from main files only
+	for _, mainFile := range files {
+		// Generate output for main files using the combined proto tree with all types
+		if err := xgen.PrepareOutputDir(cfg.O); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		// Use the main file path but with all proto trees available for type resolution
+		path := filepath.Join(cfg.O, strings.TrimPrefix(mainFile, cfg.I))
+		generator := &xgen.CodeGenerator{
+			Lang:      cfg.Lang,
+			Package:   cfg.Pkg,
+			File:      path,
+			ProtoTree: allProtoTrees, // Use combined proto tree with ALL types
+			StructAST: map[string]string{},
+		}
+
+		funcName := fmt.Sprintf("Gen%s", xgen.MakeFirstUpperCase(cfg.Lang))
+		if err = xgen.CallFuncByName(generator, funcName, []reflect.Value{}); err != nil {
+			fmt.Printf("code generation error for %s: %s\r\n", mainFile, err.Error())
 			os.Exit(1)
 		}
 	}

@@ -114,17 +114,87 @@ func genGoFieldName(name string, unique bool) (fieldName string) {
 }
 
 func genGoFieldType(name string) string {
+	// Handle empty names
+	if strings.TrimSpace(name) == "" {
+		return "interface{}"
+	}
+
+	// Check if it's a built-in type
 	if _, ok := goBuildinType[name]; ok {
 		return name
 	}
+
+	// Handle common XSD types that might not be in built-in map
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "string", "normalizedstring", "token", "anyuri", "qname":
+		return "string"
+	case "boolean":
+		return "bool"
+	case "decimal", "double", "float":
+		return "float64"
+	case "integer", "int", "long":
+		return "int64"
+	case "short":
+		return "int16"
+	case "byte":
+		return "int8"
+	case "unsignedlong":
+		return "uint64"
+	case "unsignedint":
+		return "uint32"
+	case "unsignedshort":
+		return "uint16"
+	case "unsignedbyte":
+		return "uint8"
+	case "date", "datetime", "time":
+		return "time.Time"
+	case "duration":
+		return "string" // Could be time.Duration but string is safer for XSD duration
+	case "base64binary", "hexbinary":
+		return "[]byte"
+	}
+
+	// Generate struct name from type name
 	var fieldType string
 	for _, str := range strings.FieldsFunc(name, splitter) {
-		fieldType += MakeFirstUpperCase(str)
+		if str != "" {
+			fieldType += MakeFirstUpperCase(str)
+		}
 	}
-	if fieldType != "" {
+
+	// If we successfully generated a field type, use it as a pointer
+	if fieldType != "" && fieldType != name {
 		return "*" + fieldType
 	}
+
+	// If the original name looks like a valid Go type name, use it directly
+	if isValidGoTypeName(name) {
+		return "*" + MakeFirstUpperCase(name)
+	}
+
+	// Fallback to interface{}
 	return "interface{}"
+}
+
+// isValidGoTypeName checks if a string could be a valid Go type name
+func isValidGoTypeName(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	// Basic validation: should start with letter and contain only letters, numbers, underscores
+	for i, r := range name {
+		if i == 0 {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+				return false
+			}
+		} else {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // GoSimpleType generates code for simple type XML schema in Go language

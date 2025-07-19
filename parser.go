@@ -158,31 +158,73 @@ func (opt *Options) GetValueType(value string, XSDSchema []interface{}) (valueTy
 		valueType = buildType
 		return
 	}
+
+	// First, try to find the type in the current schema
 	valueType = getBasefromSimpleType(trimNSPrefix(value), XSDSchema)
 	if valueType != trimNSPrefix(value) && valueType != "" {
 		return
 	}
+
+	// Then try to find it in all parsed schemas
+	for _, schema := range opt.ParseFileMap {
+		if vt := getBasefromSimpleType(trimNSPrefix(value), schema); vt != trimNSPrefix(value) && vt != "" {
+			valueType = vt
+			return
+		}
+	}
+
 	if opt.Extract {
 		return
 	}
+
+	// Handle namespace-prefixed types by looking up schema location
 	schemaLocation := opt.NSSchemaLocationMap[opt.parseNS(value)]
 	if isValidURL(schemaLocation) {
 		return
 	}
-	xsdFile := filepath.Join(opt.FileDir, schemaLocation)
-	var fi os.FileInfo
-	fi, err = os.Stat(xsdFile)
-	if err != nil {
-		return
-	}
-	if fi.IsDir() {
-		// extract type of value from include schema.
-		valueType = ""
-		for include := range opt.IncludeMap {
+
+	if schemaLocation != "" {
+		xsdFile := filepath.Join(opt.FileDir, schemaLocation)
+		var fi os.FileInfo
+		fi, err = os.Stat(xsdFile)
+		if err != nil {
+			return
+		}
+		if fi.IsDir() {
+			// extract type of value from include schema.
+			valueType = ""
+			for include := range opt.IncludeMap {
+				parser := NewParser(&Options{
+					FilePath:            filepath.Join(opt.FileDir, include),
+					OutputDir:           opt.OutputDir,
+					Extract:             true,
+					Lang:                opt.Lang,
+					IncludeMap:          opt.IncludeMap,
+					LocalNameNSMap:      opt.LocalNameNSMap,
+					NSSchemaLocationMap: opt.NSSchemaLocationMap,
+					ParseFileList:       opt.ParseFileList,
+					ParseFileMap:        opt.ParseFileMap,
+					ProtoTree:           make([]interface{}, 0),
+				})
+				if parser.Parse() != nil {
+					return
+				}
+				if vt := getBasefromSimpleType(trimNSPrefix(value), parser.ProtoTree); vt != trimNSPrefix(value) {
+					valueType = vt
+				}
+			}
+			if valueType == "" {
+				valueType = trimNSPrefix(value)
+			}
+			return
+		}
+
+		depXSDSchema, ok := opt.ParseFileMap[xsdFile]
+		if !ok {
 			parser := NewParser(&Options{
-				FilePath:            filepath.Join(opt.FileDir, include),
+				FilePath:            xsdFile,
 				OutputDir:           opt.OutputDir,
-				Extract:             true,
+				Extract:             false,
 				Lang:                opt.Lang,
 				IncludeMap:          opt.IncludeMap,
 				LocalNameNSMap:      opt.LocalNameNSMap,
@@ -194,22 +236,16 @@ func (opt *Options) GetValueType(value string, XSDSchema []interface{}) (valueTy
 			if parser.Parse() != nil {
 				return
 			}
-			if vt := getBasefromSimpleType(trimNSPrefix(value), parser.ProtoTree); vt != trimNSPrefix(value) {
-				valueType = vt
-			}
+			depXSDSchema = parser.ProtoTree
 		}
-		if valueType == "" {
-			valueType = trimNSPrefix(value)
+		valueType = getBasefromSimpleType(trimNSPrefix(value), depXSDSchema)
+		if valueType != trimNSPrefix(value) && valueType != "" {
+			return
 		}
-		return
-	}
-
-	depXSDSchema, ok := opt.ParseFileMap[xsdFile]
-	if !ok {
 		parser := NewParser(&Options{
 			FilePath:            xsdFile,
 			OutputDir:           opt.OutputDir,
-			Extract:             false,
+			Extract:             true,
 			Lang:                opt.Lang,
 			IncludeMap:          opt.IncludeMap,
 			LocalNameNSMap:      opt.LocalNameNSMap,
@@ -221,27 +257,13 @@ func (opt *Options) GetValueType(value string, XSDSchema []interface{}) (valueTy
 		if parser.Parse() != nil {
 			return
 		}
-		depXSDSchema = parser.ProtoTree
+		valueType = getBasefromSimpleType(trimNSPrefix(value), parser.ProtoTree)
 	}
-	valueType = getBasefromSimpleType(trimNSPrefix(value), depXSDSchema)
-	if valueType != trimNSPrefix(value) && valueType != "" {
-		return
+
+	// If still not found, return the trimmed value as-is rather than empty string
+	if valueType == "" {
+		valueType = trimNSPrefix(value)
 	}
-	parser := NewParser(&Options{
-		FilePath:            xsdFile,
-		OutputDir:           opt.OutputDir,
-		Extract:             true,
-		Lang:                opt.Lang,
-		IncludeMap:          opt.IncludeMap,
-		LocalNameNSMap:      opt.LocalNameNSMap,
-		NSSchemaLocationMap: opt.NSSchemaLocationMap,
-		ParseFileList:       opt.ParseFileList,
-		ParseFileMap:        opt.ParseFileMap,
-		ProtoTree:           make([]interface{}, 0),
-	})
-	if parser.Parse() != nil {
-		return
-	}
-	valueType = getBasefromSimpleType(trimNSPrefix(value), parser.ProtoTree)
+
 	return
 }
